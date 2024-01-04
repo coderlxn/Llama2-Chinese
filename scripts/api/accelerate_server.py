@@ -74,7 +74,7 @@ def get_prompt(chat_history, system_prompt: str):
                 ret += "[INST]"
             else:
                 ret += "[/INST]"
-    ret += " Assistant:"
+    ret += "[/INST] Assistant:"
     print("prompt:{}".format(ret))
     return ret
 
