@@ -91,7 +91,7 @@ async def create_item(request: Request):
     top_p = json_post_list.get('top_p')
     temperature = json_post_list.get('temperature')
     
-    prompt = get_prompt(history, system_prompt)
+    prompt = history # get_prompt(history, system_prompt)
     inputs = tokenizer([prompt], return_tensors='pt').to("cuda")
     generate_kwargs = dict(
         inputs,
