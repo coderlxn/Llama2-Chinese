@@ -51,29 +51,30 @@ def get_prompt(chat_history, system_prompt: str):
     sep = " "
     sep2 =" </s><s>"
     stop_token_ids = [2]
-    system_template = f"[INST] <<SYS>>\n{system_prompt}\n<</SYS>>\n\n"
+    system_template = f"<s>[INST] <<SYS>>\n{system_prompt}\n<</SYS>>\n\n"
     roles = ("[INST]", "[/INST]")
     seps = [sep, sep2]
     if system_prompt.strip() != "":
         ret = system_template
     else:
-        ret = "[INST] "
+        ret = "<s>[INST]"
     for i, chat in enumerate(chat_history):
         message = chat["content"]
         role = chat["role"]
         if message:
             if i == 0:
-                ret += message + " "
+                ret += " Human: " + message + " "
             else:
                 if role == "Human":
-                    ret +=  "[INST]" + " " + message + seps[i % 2]
+                    ret +=  "[INST] Human:" + " " + message + seps[i % 2]
                 else:
-                    ret +=  "[/INST]" + " " + message + seps[i % 2]
+                    ret +=  "[/INST] Assistant:" + " " + message + seps[i % 2]
         else:
             if role == "Human":
                 ret += "[INST]"
             else:
                 ret += "[/INST]"
+    ret += " Assistant:"
     print("prompt:{}".format(ret))
     return ret
 
