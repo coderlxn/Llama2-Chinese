@@ -8,8 +8,7 @@ import multiprocessing as mp
 import httpx
 import base64
 import argparse
-import gc
-import math
+import uuid
 import logging
 import os
 import time
@@ -40,6 +39,10 @@ world_size = torch.cuda.device_count()
 rank = local_rank
 
 
+def generate_uuid() -> str:
+    return str(uuid.uuid4())
+
+
 def get_world_size() -> int:
     if dist.is_initialized():
         return dist.get_world_size()
@@ -53,36 +56,32 @@ def print_rank0(*msg):
     print(*msg)
 
 
-def get_prompt(chat_history, system_prompt: str):
-    B_INST, E_INST = "[INST]", "[/INST]"
-    B_SYS, E_SYS = "<<SYS>>\n", "\n<</SYS>>\n\n"
+def get_prompt(messages: list):
+    system_prompt = ''
+    if len(messages) > 0 and messages[0]['role'] == 'system':
+        system_prompt = messages[0]['role']['content']
 
     sep = " "
     sep2 = " </s><s>"
-    stop_token_ids = [2]
     system_template = f"<s>[INST] <<SYS>>\n{system_prompt}\n<</SYS>>\n\n"
-    roles = ("[INST]", "[/INST]")
     seps = [sep, sep2]
     if system_prompt.strip() != "":
         ret = system_template
     else:
         ret = "<s>[INST]"
-    for i, chat in enumerate(chat_history):
+    for i, chat in enumerate(messages):
         message = chat["content"]
         role = chat["role"]
-        if message:
-            if i == 0:
+        if i <= 1:
+            if role == 'user':
                 ret += " Human: " + message + " "
-            else:
-                if role == "Human":
-                    ret += "[INST] Human:" + " " + message + seps[i % 2]
-                else:
-                    ret += "[/INST] Assistant:" + " " + message + seps[i % 2]
+            elif role == 'system':
+                pass
         else:
-            if role == "Human":
-                ret += "[INST]"
+            if role == "user":
+                ret += "[INST] Human:" + " " + message + seps[i % 2]
             else:
-                ret += "[/INST]"
+                ret += "[/INST] Assistant:" + " " + message + seps[i % 2]
     ret += "[/INST] Assistant:"
     print("prompt:{}".format(ret))
     return ret
@@ -102,14 +101,13 @@ class CogenChatRequest(tornado.web.RequestHandler):
         logging.info('new post request connect')
         global model, tokenizer
         body = self.request.body.decode('utf-8')
-        json_post_list = json.loads(body)
-        history = json_post_list.get('history')
-        system_prompt = json_post_list.get('system_prompt')
-        max_new_tokens = json_post_list.get('max_new_tokens')
-        top_p = json_post_list.get('top_p')
-        temperature = json_post_list.get('temperature')
+        json_obj = json.loads(body)
+        messages = json_obj.get('history')
+        max_new_tokens = json_obj.get('max_tokens') or 2048
+        top_p = json_obj.get('n')
+        temperature = json_obj.get('temperature') or 1
 
-        prompt = get_prompt(history, system_prompt)
+        prompt = get_prompt(messages)
         inputs = tokenizer([prompt], return_tensors='pt').to("cuda")
         generate_kwargs = dict(
             inputs,
@@ -130,20 +128,95 @@ class CogenChatRequest(tornado.web.RequestHandler):
         bot_message = ''
         print('Human:', prompt)
         print('Assistant: ', end='', flush=True)
+        uid = generate_uuid()
+        created = int(datetime.datetime.now().timestamp())
         for new_text in streamer:
             print(new_text, end='', flush=True)
             if len(new_text) == 0:
                 continue
             if new_text != '</s>':
-                bot_message += new_text
-            if 'Human:' in bot_message:
-                bot_message = bot_message.split('Human:')[0]
-            # history[-1][1] = bot_message
-            print(f'bot message from streamer {bot_message}')
-            self.write(f'data:{"code": 200, "msg": "success", "data": "text {bot_message}"}\n\n')
-            await self.flush()
+                message = {"id": uid, "object": "chat.completion.chunk",
+                           "created": created, "model": "Cogen", "system_fingerprint": "",
+                           "choices": [{"index": 0, "delta": {"role": "assistant", "content": new_text},
+                                        "logprobs": None, "finish_reason": None}]}
+                self.write('data:{}\n\n'.format(json.dumps(message)))
+                await self.flush()
         end_time = time.time()
-        self.write('data:{"code": 200, "msg": "done", "data": {}}\n\n')
+        self.write('data: [DONE]\n\n')
+        print('生成耗时：', end_time - start_time, '文字长度：', len(bot_message), '字耗时：',
+              (end_time - start_time) / len(bot_message))
+
+
+class CogenPromptCompleteRequest(tornado.web.RequestHandler):
+
+    def __init__(self, *args, **kwargs):
+        super(CogenPromptCompleteRequest, self).__init__(*args, **kwargs)
+        self.set_header('Content-Type', 'text/event-stream')
+        self.set_header('Access-Control-Allow-Origin', "*")
+        self.set_header("Access-Control-Allow-Headers", "*")
+        # 请求方式
+        self.set_header("Access-Control-Allow-Methods", "*")
+
+    async def post(self):
+        logging.info('new post request connect')
+        global model, tokenizer
+        body = self.request.body.decode('utf-8')
+        json_obj = json.loads(body)
+        prompt = json_obj.get('prompt')
+        messages = [{"role": "system",
+                     "content": "You are a helpful prompt engineer.Creates a completion for the provided prompt"},
+                    {"role": "user", "content": prompt}]
+        max_new_tokens = json_obj.get('max_tokens') or 2048
+        temperature = json_obj.get('temperature') or 1
+
+        prompt = get_prompt(messages)
+        inputs = tokenizer([prompt], return_tensors='pt').to("cuda")
+        generate_kwargs = dict(
+            inputs,
+            streamer=streamer,
+            max_new_tokens=max_new_tokens,
+            do_sample=True,
+            top_p=1,
+            top_k=50,
+            temperature=temperature,
+            num_beams=1,
+            repetition_penalty=1.2,
+            max_length=2048,
+        )
+
+        thread = Thread(target=model.generate, kwargs=generate_kwargs)
+        thread.start()
+        start_time = time.time()
+        bot_message = ''
+        print('Human:', prompt)
+        print('Assistant: ', end='', flush=True)
+        uid = generate_uuid()
+        created = int(datetime.datetime.now().timestamp())
+        for new_text in streamer:
+            print(new_text, end='', flush=True)
+            if len(new_text) == 0:
+                continue
+            if new_text != '</s>':
+                message = {
+                    "id": uid,
+                    "object": "text_completion",
+                    "created": created,
+                    "choices": [
+                        {
+                            "text": new_text,
+                            "index": 0,
+                            "logprobs": None,
+                            "finish_reason": None
+                        }
+                    ],
+                    "model": "Cogen",
+                    "system_fingerprint": ""
+                }
+
+                self.write('data:{}\n\n'.format(json.dumps(message)))
+                await self.flush()
+        end_time = time.time()
+        self.write('data: [DONE]\n\n')
         print('生成耗时：', end_time - start_time, '文字长度：', len(bot_message), '字耗时：',
               (end_time - start_time) / len(bot_message))
 
@@ -162,13 +235,15 @@ class TestChatRequest(tornado.web.RequestHandler):
         logging.info('new post request connect')
 
         for idx in range(10):
-            self.write(f'data:{"code": 200, "msg": "success", "data": "text {idx}"}\n\n')
+            self.write('data:{"code": 200, "msg": "success", "data": "text {idx}"}\n\n')
             await self.flush()
+            time.sleep(3)
 
 
 def make_app():
     return tornado.web.Application([
-        (r"/cogen/v1/chat", CogenChatRequest),
+        (r"/cogen/v1/chat/completions", CogenChatRequest),
+        (r"/cogen//v1/completions", CogenPromptCompleteRequest),
         (r"/cogen/v1/test", TestChatRequest)
     ])
 
@@ -213,10 +288,6 @@ if __name__ == "__main__":
     model.eval()
 
     app = make_app()
-
-    i18n_path = os.path.join(os.path.dirname(__file__), 'locales')
-    tornado.locale.load_translations(i18n_path)
-    tornado.locale.set_default_locale('en_US')
 
     app.listen(6006)
     logging.info("sse服务启动")
