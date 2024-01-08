@@ -1,6 +1,7 @@
 import argparse
 import gc
 import math
+import logging
 import os
 import time
 from threading import Thread
@@ -110,47 +111,48 @@ async def stream_generate(request: Request):
         max_length=2048,
     )
 
-    thread = Thread(target=model.generate, kwargs=generate_kwargs)
-    thread.start()
-    start_time = time.time()
-    bot_message = ''
-    print('Human:', prompt)
-    print('Assistant: ', end='', flush=True)
-    for new_text in streamer:
-        print(new_text, end='', flush=True)
-        if len(new_text) == 0:
-            continue
-        if new_text != '</s>':
-            bot_message += new_text
-        if 'Human:' in bot_message:
-            bot_message = bot_message.split('Human:')[0]
-        # history[-1][1] = bot_message
-        print(f'bot message from streamer {bot_message}')
-        yield bot_message
-    end_time = time.time()
-    print('生成耗时：', end_time - start_time, '文字长度：', len(bot_message), '字耗时：',
-          (end_time - start_time) / len(bot_message))
+    # thread = Thread(target=model.generate, kwargs=generate_kwargs)
+    # thread.start()
+    # start_time = time.time()
+    # bot_message = ''
+    # print('Human:', prompt)
+    # print('Assistant: ', end='', flush=True)
+    # for new_text in streamer:
+    #     print(new_text, end='', flush=True)
+    #     if len(new_text) == 0:
+    #         continue
+    #     if new_text != '</s>':
+    #         bot_message += new_text
+    #     if 'Human:' in bot_message:
+    #         bot_message = bot_message.split('Human:')[0]
+    #     # history[-1][1] = bot_message
+    #     print(f'bot message from streamer {bot_message}')
+    #     yield bot_message
+    # end_time = time.time()
+    # print('生成耗时：', end_time - start_time, '文字长度：', len(bot_message), '字耗时：',
+    #       (end_time - start_time) / len(bot_message))
 
-    # generate_ids = model.generate(**generate_kwargs)
-    #
-    # generate_ids = [item[len(inputs[0]):-1] for item in generate_ids]
-    #
-    # bot_message = tokenizer.batch_decode(generate_ids, skip_special_tokens=True, clean_up_tokenization_spaces=False)[0]
-    # if 'Human:' in bot_message:
-    #     bot_message = bot_message.split('Human:')[0]
-    #
-    # now = datetime.datetime.now()
-    # time = now.strftime("%Y-%m-%d %H:%M:%S")
-    # answer = {
-    #     "response": bot_message,
-    #     "status": 200,
-    #     "time": time
-    # }
-    # return answer
+    generate_ids = model.generate(**generate_kwargs)
+
+    generate_ids = [item[len(inputs[0]):-1] for item in generate_ids]
+
+    bot_message = tokenizer.batch_decode(generate_ids, skip_special_tokens=True, clean_up_tokenization_spaces=False)[0]
+    if 'Human:' in bot_message:
+        bot_message = bot_message.split('Human:')[0]
+
+    now = datetime.datetime.now()
+    time = now.strftime("%Y-%m-%d %H:%M:%S")
+    answer = {
+        "response": bot_message,
+        "status": 200,
+        "time": time
+    }
+    return answer
 
 
 @app.post("/generate")
 async def create_item(request: Request):
+    logging.info("generate function called")
     return StreamingResponse(stream_generate(request))
 
 
@@ -170,6 +172,7 @@ def print_rank0(*msg):
 async def fake_video_streamer():
     for i in range(10):
         yield b"some fake video bytes"
+        time.sleep(1)
 
 
 @app.get("/test")
@@ -178,6 +181,9 @@ async def main_test():
 
 
 if __name__ == '__main__':
+
+    logging.basicConfig(level=logging.DEBUG)
+
     dtype = torch.float16
     kwargs = dict(
         device_map="auto",

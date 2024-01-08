@@ -4,27 +4,28 @@ import time
 import urllib.request
 import sys
 
-def test_api_server(input_text):
+
+def api_server(input_text):
     header = {'Content-Type': 'application/json'}
 
     data = {
-          "system_prompt": "",
-          "history": inputs,
-          "n" : 1,
-          "best_of": 1, 
-          "presence_penalty": 1.2, 
-          "frequency_penalty": 0.2, 
-          "temperature": 0.3, 
-          "top_p" : 0.95, 
-          "top_k": 50, 
-          "use_beam_search": False, 
-          "stop": [], 
-          "ignore_eos" :False, 
-          "logprobs": None,
-          "max_new_tokens": 2048, 
+        "system_prompt": "",
+        "history": inputs,
+        "n": 1,
+        "best_of": 1,
+        "presence_penalty": 1.2,
+        "frequency_penalty": 0.2,
+        "temperature": 0.3,
+        "top_p": 0.95,
+        "top_k": 50,
+        "use_beam_search": False,
+        "stop": [],
+        "ignore_eos": False,
+        "logprobs": None,
+        "max_new_tokens": 2048,
     }
     request = urllib.request.Request(
-        url='http://127.0.0.1:8001/generate',
+        url='https://u237898-a682-8e133067.westb.seetacloud.com:8443/generate',
         headers=header,
         data=json.dumps(data).encode('utf-8')
     )
@@ -42,8 +43,8 @@ def test_api_server(input_text):
 
     return result
 
+
 if __name__ == "__main__":
-    
     # 多伦对话测试
     """ 多伦对话测试
         last_question = "怎么回来呢"
@@ -53,7 +54,6 @@ if __name__ == "__main__":
     """
     # 单轮对话  
     last_question = "怎么去北京"
-    inputs = [ {"role" : "Human", "content": last_question}]
-    
-    test_api_server(inputs)
+    inputs = [{"role": "Human", "content": last_question}]
 
+    api_server(inputs)
