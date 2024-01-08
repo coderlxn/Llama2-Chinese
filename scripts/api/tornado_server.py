@@ -136,8 +136,10 @@ class CogenChatRequest(tornado.web.RequestHandler):
                 bot_message = bot_message.split('Human:')[0]
             # history[-1][1] = bot_message
             print(f'bot message from streamer {bot_message}')
-            yield bot_message
+            self.write(f'data:{"code": 200, "msg": "success", "data": "text {bot_message}"}\n\n')
+            await self.flush()
         end_time = time.time()
+        self.write('data:{"code": 200, "msg": "done", "data": {}}\n\n')
         print('生成耗时：', end_time - start_time, '文字长度：', len(bot_message), '字耗时：',
               (end_time - start_time) / len(bot_message))
 
