@@ -40,6 +40,19 @@ world_size = torch.cuda.device_count()
 rank = local_rank
 
 
+def get_world_size() -> int:
+    if dist.is_initialized():
+        return dist.get_world_size()
+    else:
+        return 1
+
+
+def print_rank0(*msg):
+    if rank != 0:
+        return
+    print(*msg)
+
+
 def get_prompt(chat_history, system_prompt: str):
     B_INST, E_INST = "[INST]", "[/INST]"
     B_SYS, E_SYS = "<<SYS>>\n", "\n<</SYS>>\n\n"
