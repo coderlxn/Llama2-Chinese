@@ -56,6 +56,40 @@ def print_rank0(*msg):
     print(*msg)
 
 
+dtype = torch.float16
+kwargs = dict(
+    device_map="auto",
+)
+print("get_world_size:{}".format(get_world_size()))
+
+infer_dtype = args.infer_dtype
+if infer_dtype not in ["int4", "int8", "float16"]:
+    raise ValueError("infer_dtype must one of int4, int8 or float16")
+
+if get_world_size() > 1:
+    kwargs["device_map"] = "balanced_low_0"
+
+if infer_dtype == "int8":
+    print_rank0("Using `load_in_8bit=True` to use quanitized model")
+    kwargs["load_in_8bit"] = True
+else:
+    kwargs["torch_dtype"] = dtype
+
+tokenizer = AutoTokenizer.from_pretrained(args.model_path, trust_remote_code=True)
+if infer_dtype in ["int8", "float16"]:
+    model = AutoModelForCausalLM.from_pretrained(args.model_path, **kwargs)
+elif infer_dtype == "int4":
+    from auto_gptq import AutoGPTQForCausalLM, get_gptq_peft_model
+
+    model = AutoGPTQForCausalLM.from_quantized(
+        args.model_path, device="cuda:0",
+        use_triton=False,
+        low_cpu_mem_usage=True,
+        # inject_fused_attention=False,
+        # inject_fused_mlp=False
+    )
+
+
 def get_prompt(messages: list):
     system_prompt = ''
     if len(messages) > 0 and messages[0]['role'] == 'system':
@@ -97,18 +131,16 @@ class CogenChatRequest(tornado.web.RequestHandler):
         # 请求方式
         self.set_header("Access-Control-Allow-Methods", "*")
 
-    async def post(self):
-        logging.info('new post request connect')
-        global model, tokenizer
-        body = self.request.body.decode('utf-8')
+    async def process_thread(self, body):
         json_obj = json.loads(body)
-        messages = json_obj.get('history')
+        messages = json_obj.get('messages')
         max_new_tokens = json_obj.get('max_tokens') or 2048
         top_p = json_obj.get('n')
         temperature = json_obj.get('temperature') or 1
 
         prompt = get_prompt(messages)
         inputs = tokenizer([prompt], return_tensors='pt').to("cuda")
+        streamer = TextIteratorStreamer(tokenizer, skip_prompt=True)
         generate_kwargs = dict(
             inputs,
             streamer=streamer,
@@ -141,10 +173,20 @@ class CogenChatRequest(tornado.web.RequestHandler):
                                         "logprobs": None, "finish_reason": None}]}
                 self.write('data:{}\n\n'.format(json.dumps(message)))
                 await self.flush()
+                bot_message += new_text
         end_time = time.time()
         self.write('data: [DONE]\n\n')
+        await self.flush()
         print('生成耗时：', end_time - start_time, '文字长度：', len(bot_message), '字耗时：',
               (end_time - start_time) / len(bot_message))
+
+    async def post(self):
+        logging.info('new post request connect')
+        body = self.request.body.decode('utf-8')
+        # t1 = Thread(target=self.process_thread, args=(body,))
+        # t1.start()
+        # t1.join()
+        await self.process_thread(body)
 
 
 class CogenPromptCompleteRequest(tornado.web.RequestHandler):
@@ -159,7 +201,6 @@ class CogenPromptCompleteRequest(tornado.web.RequestHandler):
 
     async def post(self):
         logging.info('new post request connect')
-        global model, tokenizer
         body = self.request.body.decode('utf-8')
         json_obj = json.loads(body)
         prompt = json_obj.get('prompt')
@@ -171,6 +212,7 @@ class CogenPromptCompleteRequest(tornado.web.RequestHandler):
 
         prompt = get_prompt(messages)
         inputs = tokenizer([prompt], return_tensors='pt').to("cuda")
+        streamer = TextIteratorStreamer(tokenizer, skip_prompt=True)
         generate_kwargs = dict(
             inputs,
             streamer=streamer,
@@ -192,7 +234,7 @@ class CogenPromptCompleteRequest(tornado.web.RequestHandler):
         print('Assistant: ', end='', flush=True)
         uid = generate_uuid()
         created = int(datetime.datetime.now().timestamp())
-        for new_text in streamer:
+        async for new_text in streamer:
             print(new_text, end='', flush=True)
             if len(new_text) == 0:
                 continue
@@ -250,42 +292,6 @@ def make_app():
 
 if __name__ == "__main__":
     logging.basicConfig(level=logging.DEBUG)
-
-    dtype = torch.float16
-    kwargs = dict(
-        device_map="auto",
-    )
-    print("get_world_size:{}".format(get_world_size()))
-
-    infer_dtype = args.infer_dtype
-    if infer_dtype not in ["int4", "int8", "float16"]:
-        raise ValueError("infer_dtype must one of int4, int8 or float16")
-
-    if get_world_size() > 1:
-        kwargs["device_map"] = "balanced_low_0"
-
-    if infer_dtype == "int8":
-        print_rank0("Using `load_in_8bit=True` to use quanitized model")
-        kwargs["load_in_8bit"] = True
-    else:
-        kwargs["torch_dtype"] = dtype
-
-    tokenizer = AutoTokenizer.from_pretrained(args.model_path, trust_remote_code=True)
-    if infer_dtype in ["int8", "float16"]:
-        model = AutoModelForCausalLM.from_pretrained(args.model_path, **kwargs)
-    elif infer_dtype == "int4":
-        from auto_gptq import AutoGPTQForCausalLM, get_gptq_peft_model
-
-        model = AutoGPTQForCausalLM.from_quantized(
-            args.model_path, device="cuda:0",
-            use_triton=False,
-            low_cpu_mem_usage=True,
-            # inject_fused_attention=False,
-            # inject_fused_mlp=False
-        )
-    streamer = TextIteratorStreamer(tokenizer, skip_prompt=True)
-
-    model.eval()
 
     app = make_app()
 
