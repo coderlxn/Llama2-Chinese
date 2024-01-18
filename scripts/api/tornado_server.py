@@ -13,7 +13,7 @@ import logging
 import os
 import time
 from threading import Thread
-
+import asyncio
 from fastapi import FastAPI, Request
 from fastapi.responses import StreamingResponse
 from transformers import AutoTokenizer, AutoModel
@@ -135,7 +135,7 @@ class CogenChatRequest(tornado.web.RequestHandler):
         json_obj = json.loads(body)
         messages = json_obj.get('messages')
         max_new_tokens = json_obj.get('max_tokens') or 2048
-        top_p = json_obj.get('n')
+        top_p = json_obj.get('n') or 1
         temperature = json_obj.get('temperature') or 1
 
         prompt = get_prompt(messages)
@@ -174,6 +174,7 @@ class CogenChatRequest(tornado.web.RequestHandler):
                 self.write('data:{}\n\n'.format(json.dumps(message)))
                 await self.flush()
                 bot_message += new_text
+            await asyncio.sleep(0)
         end_time = time.time()
         self.write('data: [DONE]\n\n')
         await self.flush()
@@ -183,10 +184,13 @@ class CogenChatRequest(tornado.web.RequestHandler):
     async def post(self):
         logging.info('new post request connect')
         body = self.request.body.decode('utf-8')
-        # t1 = Thread(target=self.process_thread, args=(body,))
-        # t1.start()
-        # t1.join()
-        await self.process_thread(body)
+        logging.debug(f'request body {body}')
+        try:
+            await self.process_thread(body)
+        except Exception as e:
+            logging.warning(f'exception occur {repr(e)}')
+            self.write('data: [DONE]\n\n')
+            await self.flush()
 
 
 class CogenPromptCompleteRequest(tornado.web.RequestHandler):
