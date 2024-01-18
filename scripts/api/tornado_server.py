@@ -93,7 +93,7 @@ elif infer_dtype == "int4":
 def get_prompt(messages: list):
     system_prompt = ''
     if len(messages) > 0 and messages[0]['role'] == 'system':
-        system_prompt = messages[0]['role']['content']
+        system_prompt = messages[0]['content']
 
     sep = " "
     sep2 = " </s><s>"
