@@ -137,6 +137,7 @@ class CogenChatRequest(tornado.web.RequestHandler):
         max_new_tokens = json_obj.get('max_tokens') or 2048
         top_p = json_obj.get('n') or 1
         temperature = json_obj.get('temperature') or 1
+        stream = json_obj.get("stream") or False
 
         prompt = get_prompt(messages)
         inputs = tokenizer([prompt], return_tensors='pt').to("cuda")
@@ -167,17 +168,43 @@ class CogenChatRequest(tornado.web.RequestHandler):
             if len(new_text) == 0:
                 continue
             if new_text != '</s>':
-                message = {"id": uid, "object": "chat.completion.chunk",
-                           "created": created, "model": "Cogen", "system_fingerprint": "",
-                           "choices": [{"index": 0, "delta": {"role": "assistant", "content": new_text},
-                                        "logprobs": None, "finish_reason": None}]}
-                self.write('data:{}\n\n'.format(json.dumps(message)))
-                await self.flush()
+                if stream:
+                    message = {"id": uid, "object": "chat.completion.chunk",
+                               "created": created, "model": "Cogen", "system_fingerprint": "",
+                               "choices": [{"index": 0, "delta": {"role": "assistant", "content": new_text},
+                                            "logprobs": None, "finish_reason": None}]}
+                    self.write('data:{}\n\n'.format(json.dumps(message)))
+                    await self.flush()
                 bot_message += new_text
             await asyncio.sleep(0)
         end_time = time.time()
-        self.write('data: [DONE]\n\n')
-        await self.flush()
+        if stream:
+            self.write('data: [DONE]\n\n')
+            await self.flush()
+        else:
+            result = {
+                "id": "uid",
+                "object": "chat.completion",
+                "created": created,
+                "model": "Cogen",
+                "system_fingerprint": "",
+                "choices": [{
+                    "index": 0,
+                    "message": {
+                        "role": "assistant",
+                        "content": bot_message,
+                    },
+                    "logprobs": None,
+                    "finish_reason": "stop"
+                }],
+                "usage": {
+                    "prompt_tokens": 0,
+                    "completion_tokens": 0,
+                    "total_tokens": 0
+                }
+            }
+            self.write(json.dumps(result))
+
         print('生成耗时：', end_time - start_time, '文字长度：', len(bot_message), '字耗时：',
               (end_time - start_time) / len(bot_message))
 
@@ -190,7 +217,7 @@ class CogenChatRequest(tornado.web.RequestHandler):
         except Exception as e:
             logging.warning(f'exception occur {repr(e)}')
             self.write('data: [DONE]\n\n')
-            await self.flush()
+            # await self.flush()
 
 
 class CogenPromptCompleteRequest(tornado.web.RequestHandler):
@@ -289,7 +316,7 @@ class TestChatRequest(tornado.web.RequestHandler):
 def make_app():
     return tornado.web.Application([
         (r"/cogen/v1/chat/completions", CogenChatRequest),
-        (r"/cogen//v1/completions", CogenPromptCompleteRequest),
+        (r"/cogen/v1/completions", CogenPromptCompleteRequest),
         (r"/cogen/v1/test", TestChatRequest)
     ])
 
